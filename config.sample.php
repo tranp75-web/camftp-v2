@@ -8,6 +8,8 @@
  * et modifier les valeurs.
  */
 
+composer require phpseclib/phpseclib
+
 return [
 
     /*
