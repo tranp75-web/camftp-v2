@@ -9,6 +9,11 @@
  * PHP 8.1+
  */
 
+$autoload = __DIR__ . '/vendor/autoload.php';
+
+if (file_exists($autoload)) {
+    require_once $autoload;
+}
 
 declare(strict_types=1);
 
