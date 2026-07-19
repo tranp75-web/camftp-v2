@@ -152,21 +152,6 @@ return [
     'filename' => '{camera}_{datetime}_{index}.jpg',
 
 
-    /*
-     * Notification mail
-     */
-    'mail' => [
-
-        'enabled' => false,
-
-        'to' => 'email@example.com',
-
-        'from' => 'CamFTP',
-
-        'subject' => 'Notification CamFTP',
-
-    ],
-
 
     /*
      * Options générales
