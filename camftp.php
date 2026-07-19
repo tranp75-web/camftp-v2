@@ -54,6 +54,11 @@ try {
     $servers = [];
 
 
+    if (!isset($config['servers'][$config['centralServer']])) {
+    throw new Exception('Serveur central invalide');
+    }   
+
+
     if ($params['numcam'] === 99) {
 
         $central = $config['centralServer'];
@@ -137,17 +142,12 @@ function success(): never
 }
 
 
-
-function fail(string $message = ''): never
+function fail(): never
 {
     http_response_code(500);
-
     echo "0";
-
     exit;
 }
-
-
 
 
 
