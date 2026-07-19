@@ -1,13 +1,21 @@
 <?php
+declare(strict_types=1);
+
 /**
- * CamFTP V2
+ * CamFTP V2.0.0
  *
- * Universal camera snapshot uploader
- *
- * Compatible CamFTP V1 / Eedomus
+ * Capture de snapshots caméra IP
+ * Transfert FTP / FTPS / SFTP
  *
  * PHP 8.1+
  */
+
+
+/*
+|--------------------------------------------------------------------------
+| Autoload SFTP (phpseclib v3 optionnel)
+|--------------------------------------------------------------------------
+*/
 
 $autoload = __DIR__ . '/vendor/autoload.php';
 
@@ -15,29 +23,36 @@ if (file_exists($autoload)) {
     require_once $autoload;
 }
 
-declare(strict_types=1);
 
+/*
+|--------------------------------------------------------------------------
+| Constantes
+|--------------------------------------------------------------------------
+*/
 
 const CAMFTP_VERSION = '2.0.0';
 
 
 /*
 |--------------------------------------------------------------------------
-| Initialisation
+| Configuration
 |--------------------------------------------------------------------------
 */
-
-ini_set('memory_limit', '512M');
 
 $configFile = __DIR__ . '/config.php';
 
 
 if (!file_exists($configFile)) {
-    fail('Configuration absente');
+    fail();
 }
 
 
 $config = require $configFile;
+
+
+if (!is_array($config)) {
+    fail();
+}
 
 
 date_default_timezone_set(
@@ -45,42 +60,64 @@ date_default_timezone_set(
 );
 
 
+
 /*
 |--------------------------------------------------------------------------
-| Exécution principale
+| Programme principal
 |--------------------------------------------------------------------------
 */
 
 try {
 
-    $params = getParameters($_GET, $config);
+
+    $params = getParameters(
+        $_GET,
+        $config
+    );
 
 
     $servers = [];
 
 
-    if (!isset($config['servers'][$config['centralServer']])) {
-    throw new Exception('Serveur central invalide');
-    }   
-
+    /*
+     * Sélection des serveurs
+     */
 
     if ($params['numcam'] === 99) {
 
-        $central = $config['centralServer'];
 
-        $servers[$central] = connectServer(
-            $config['servers'][$central]
-        );
+        if (
+            !isset(
+                $config['servers']
+                [$config['centralServer']]
+            )
+        ) {
+            throw new RuntimeException(
+                'Serveur central absent'
+            );
+        }
+
+
+        $id = $config['centralServer'];
+
+
+        $servers[$id] =
+            connectServer(
+                $config['servers'][$id]
+            );
+
 
     } else {
 
 
         if ($params['numftp1'] > 0) {
 
-            $servers[$params['numftp1']] = connectServer(
-                $config['servers'][$params['numftp1']]
-            );
+            $id = $params['numftp1'];
 
+            $servers[$id] =
+                connectServer(
+                    $config['servers'][$id]
+                );
         }
 
 
@@ -89,27 +126,47 @@ try {
             $params['numftp2'] !== $params['numftp1']
         ) {
 
-            $servers[$params['numftp2']] = connectServer(
-                $config['servers'][$params['numftp2']]
-            );
+            $id = $params['numftp2'];
 
+            $servers[$id] =
+                connectServer(
+                    $config['servers'][$id]
+                );
         }
 
     }
 
 
+    if (empty($servers)) {
 
-    executeCapture(
-        $params,
-        $config,
-        $servers
-    );
+        throw new RuntimeException(
+            'Aucune destination'
+        );
+
+    }
 
 
 
-    foreach ($servers as $connection) {
+    try {
 
-        disconnectServer($connection);
+
+        executeCapture(
+            $params,
+            $config,
+            $servers
+        );
+
+
+    } finally {
+
+
+        foreach ($servers as $server) {
+
+            disconnectServer(
+                $server
+            );
+
+        }
 
     }
 
@@ -122,46 +179,44 @@ try {
 
 
     /*
-     * Pas de journalisation demandée.
-     * On retourne uniquement un état compatible V1.
+     * Aucun log volontairement.
+     * Retour compatible V1.
      */
 
-    fail($e->getMessage());
+    fail();
 
 }
-
 
 
 
 /*
 |--------------------------------------------------------------------------
-| Gestion erreurs
+| Gestion des résultats
 |--------------------------------------------------------------------------
 */
 
-
 function success(): never
 {
-    echo "1";
+    echo '1';
     exit;
 }
+
 
 
 function fail(): never
 {
-    http_response_code(500);
-    echo "0";
+    echo '0';
     exit;
 }
 
 
 
+
 /*
 |--------------------------------------------------------------------------
-| Lecture et validation GET
+| Validation paramètres GET
 |--------------------------------------------------------------------------
 */
-
 
 function getParameters(
     array $input,
@@ -169,71 +224,94 @@ function getParameters(
 ): array {
 
 
-    $cameraCount = count($config['cameras']);
+    $cameraCount =
+        count(
+            $config['cameras'] ?? []
+        );
 
-    $serverCount = count($config['servers']);
+
+    $serverCount =
+        count(
+            $config['servers'] ?? []
+        );
 
 
-    $numcam = isset($input['numcam'])
-        ? (int)$input['numcam']
+
+    $numcam =
+        isset($input['numcam'])
+        ? filter_var(
+            $input['numcam'],
+            FILTER_VALIDATE_INT
+        )
         : 99;
 
 
+
     if (
-        $numcam !== 99 &&
+        $numcam === false ||
         (
-            $numcam < 1 ||
-            $numcam > $cameraCount
+            $numcam !== 99 &&
+            (
+                $numcam < 1 ||
+                $numcam > $cameraCount
+            )
         )
     ) {
 
-        throw new Exception('Caméra invalide');
+        throw new RuntimeException(
+            'Caméra invalide'
+        );
 
     }
 
 
 
-    $numftp1 = isset($input['numftp1'])
-        ? (int)$input['numftp1']
-        : 0;
+
+    $numftp1 =
+        getIntParameter(
+            $input,
+            'numftp1',
+            0
+        );
+
+
+    $numftp2 =
+        getIntParameter(
+            $input,
+            'numftp2',
+            0
+        );
+
 
 
     if (
         $numftp1 < 0 ||
-        $numftp1 > $serverCount
-    ) {
-
-        throw new Exception('FTP1 invalide');
-
-    }
-
-
-
-
-    $numftp2 = isset($input['numftp2'])
-        ? (int)$input['numftp2']
-        : 0;
-
-
-    if (
+        $numftp1 > $serverCount ||
         $numftp2 < 0 ||
         $numftp2 > $serverCount
     ) {
 
-        throw new Exception('FTP2 invalide');
+        throw new RuntimeException(
+            'Serveur invalide'
+        );
 
     }
 
 
 
-
     $maxSnapshots =
-        $config['limits']['maxSnapshots'] ?? 100;
+        $config['limits']['maxSnapshots']
+        ?? 100;
 
 
-    $nbsnap = isset($input['nbsnap'])
-        ? (int)$input['nbsnap']
-        : 1;
+
+    $nbsnap =
+        getIntParameter(
+            $input,
+            'nbsnap',
+            1
+        );
+
 
 
     if (
@@ -241,20 +319,27 @@ function getParameters(
         $nbsnap > $maxSnapshots
     ) {
 
-        throw new Exception('Nombre snapshots invalide');
+        throw new RuntimeException(
+            'Nombre snapshots invalide'
+        );
 
     }
 
 
 
-
     $maxDelay =
-        $config['limits']['maxDelay'] ?? 60;
+        $config['limits']['maxDelay']
+        ?? 60;
 
 
-    $updelay = isset($input['updelay'])
-        ? (int)$input['updelay']
-        : 1;
+
+    $updelay =
+        getIntParameter(
+            $input,
+            'updelay',
+            0
+        );
+
 
 
     if (
@@ -262,15 +347,11 @@ function getParameters(
         $updelay > $maxDelay
     ) {
 
-        throw new Exception('Délai invalide');
+        throw new RuntimeException(
+            'Délai invalide'
+        );
 
     }
-
-
-
-
-    $getmail = isset($input['getmail']) &&
-               (int)$input['getmail'] === 1;
 
 
 
@@ -286,54 +367,100 @@ function getParameters(
 
         'updelay' => $updelay,
 
-        'getmail' => $getmail,
-
     ];
+
+}
+
+
+
+function getIntParameter(
+    array $input,
+    string $name,
+    int $default
+): int {
+
+
+    if (!isset($input[$name])) {
+
+        return $default;
+
+    }
+
+
+    $value =
+        filter_var(
+            $input[$name],
+            FILTER_VALIDATE_INT
+        );
+
+
+    if ($value === false) {
+
+        throw new RuntimeException(
+            "Paramètre invalide : $name"
+        );
+
+    }
+
+
+    return $value;
 
 }
 /*
 |--------------------------------------------------------------------------
-| Connexions serveurs
+| Connexions FTP / FTPS / SFTP
 |--------------------------------------------------------------------------
 */
 
 
-function connectServer(array $server): array
-{
-
-    $type = strtolower(
-        $server['type'] ?? 'ftp'
-    );
+function connectServer(
+    array $server
+): array {
 
 
-    switch ($type) {
+    if (
+        !isset($server['type'])
+    ) {
 
-
-        case 'ftp':
-
-            return connectFTP($server, false);
-
-
-
-        case 'ftps':
-
-            return connectFTP($server, true);
-
-
-
-        case 'sftp':
-
-            return connectSFTP($server);
-
-
-
-        default:
-
-            throw new Exception(
-                'Type serveur inconnu'
-            );
+        throw new RuntimeException(
+            'Type serveur absent'
+        );
 
     }
+
+
+
+    return match (
+        strtolower($server['type'])
+    ) {
+
+
+        'ftp' =>
+            connectFTP(
+                $server,
+                false
+            ),
+
+
+        'ftps' =>
+            connectFTP(
+                $server,
+                true
+            ),
+
+
+        'sftp' =>
+            connectSFTP(
+                $server
+            ),
+
+
+        default =>
+            throw new RuntimeException(
+                'Protocole inconnu'
+            ),
+
+    };
 
 }
 
@@ -349,7 +476,7 @@ function connectServer(array $server): array
 
 function connectFTP(
     array $server,
-    bool $ssl = false
+    bool $ssl
 ): array {
 
 
@@ -363,38 +490,45 @@ function connectFTP(
 
     if ($ssl) {
 
-        if (!function_exists('ftp_ssl_connect')) {
 
-            throw new Exception(
-                'FTPS indisponible'
+        if (
+            !function_exists(
+                'ftp_ssl_connect'
+            )
+        ) {
+
+            throw new RuntimeException(
+                'FTPS non disponible'
             );
 
         }
 
 
-        $connection = ftp_ssl_connect(
-            $host,
-            $port,
-            10
-        );
+        $ftp =
+            ftp_ssl_connect(
+                $host,
+                $port,
+                10
+            );
 
 
     } else {
 
 
-        $connection = ftp_connect(
-            $host,
-            $port,
-            10
-        );
+        $ftp =
+            ftp_connect(
+                $host,
+                $port,
+                10
+            );
 
     }
 
 
 
-    if (!$connection) {
+    if (!$ftp) {
 
-        throw new Exception(
+        throw new RuntimeException(
             'Connexion FTP impossible'
         );
 
@@ -402,20 +536,19 @@ function connectFTP(
 
 
 
+    if (
+        !ftp_login(
+            $ftp,
+            $server['user'] ?? '',
+            $server['password'] ?? ''
+        )
+    ) {
 
-    $login = ftp_login(
-        $connection,
-        $server['user'],
-        $server['password']
-    );
+
+        ftp_close($ftp);
 
 
-
-    if (!$login) {
-
-        ftp_close($connection);
-
-        throw new Exception(
+        throw new RuntimeException(
             'Authentification FTP impossible'
         );
 
@@ -424,7 +557,7 @@ function connectFTP(
 
 
     ftp_pasv(
-        $connection,
+        $ftp,
         $server['passive'] ?? true
     );
 
@@ -434,14 +567,19 @@ function connectFTP(
         !empty($server['path'])
     ) {
 
+
         if (
             !ftp_chdir(
-                $connection,
+                $ftp,
                 $server['path']
             )
         ) {
 
-            throw new Exception(
+
+            ftp_close($ftp);
+
+
+            throw new RuntimeException(
                 'Répertoire FTP inaccessible'
             );
 
@@ -455,7 +593,7 @@ function connectFTP(
 
         'type' => $ssl ? 'ftps' : 'ftp',
 
-        'connection' => $connection,
+        'connection' => $ftp,
 
     ];
 
@@ -469,11 +607,6 @@ function connectFTP(
 |--------------------------------------------------------------------------
 | SFTP
 |--------------------------------------------------------------------------
-|
-| Nécessite phpseclib v3
-|
-| composer require phpseclib/phpseclib
-|
 */
 
 
@@ -488,8 +621,9 @@ function connectSFTP(
         )
     ) {
 
-        throw new Exception(
-            'phpseclib absent pour SFTP'
+
+        throw new RuntimeException(
+            'phpseclib SFTP absent'
         );
 
     }
@@ -511,7 +645,8 @@ function connectSFTP(
         )
     ) {
 
-        throw new Exception(
+
+        throw new RuntimeException(
             'Connexion SFTP impossible'
         );
 
@@ -523,13 +658,15 @@ function connectSFTP(
         !empty($server['path'])
     ) {
 
+
         if (
             !$sftp->chdir(
                 $server['path']
             )
         ) {
 
-            throw new Exception(
+
+            throw new RuntimeException(
                 'Répertoire SFTP inaccessible'
             );
 
@@ -552,9 +689,10 @@ function connectSFTP(
 
 
 
+
 /*
 |--------------------------------------------------------------------------
-| Upload fichier
+| Upload
 |--------------------------------------------------------------------------
 */
 
@@ -563,10 +701,13 @@ function uploadSnapshot(
     array $server,
     string $filename,
     string $content
-): bool {
+): void {
 
 
-    switch ($server['type']) {
+    switch (
+        $server['type']
+    ) {
+
 
 
         case 'ftp':
@@ -574,10 +715,21 @@ function uploadSnapshot(
         case 'ftps':
 
 
-            $stream = fopen(
-                'php://memory',
-                'r+'
-            );
+            $stream =
+                fopen(
+                    'php://memory',
+                    'r+'
+                );
+
+
+            if (!$stream) {
+
+                throw new RuntimeException(
+                    'Mémoire temporaire impossible'
+                );
+
+            }
+
 
 
             fwrite(
@@ -590,19 +742,29 @@ function uploadSnapshot(
 
 
 
-            $result = ftp_fput(
-                $server['connection'],
-                $filename,
-                $stream,
-                FTP_BINARY
-            );
+            $result =
+                ftp_fput(
+                    $server['connection'],
+                    $filename,
+                    $stream,
+                    FTP_BINARY
+                );
 
 
             fclose($stream);
 
 
 
-            return $result;
+            if (!$result) {
+
+                throw new RuntimeException(
+                    'Upload FTP impossible'
+                );
+
+            }
+
+
+            break;
 
 
 
@@ -610,19 +772,30 @@ function uploadSnapshot(
         case 'sftp':
 
 
-            return $server['connection']
-                ->put(
+            if (
+                !$server['connection']->put(
                     $filename,
                     $content
+                )
+            ) {
+
+                throw new RuntimeException(
+                    'Upload SFTP impossible'
                 );
+
+            }
+
+
+            break;
 
 
 
 
         default:
 
-            throw new Exception(
-                'Protocole upload inconnu'
+
+            throw new RuntimeException(
+                'Type upload inconnu'
             );
 
     }
@@ -632,9 +805,10 @@ function uploadSnapshot(
 
 
 
+
 /*
 |--------------------------------------------------------------------------
-| Fermeture connexions
+| Fermeture connexion
 |--------------------------------------------------------------------------
 */
 
@@ -644,16 +818,27 @@ function disconnectServer(
 ): void {
 
 
-    switch ($server['type']) {
+    switch (
+        $server['type']
+    ) {
 
 
         case 'ftp':
 
         case 'ftps':
 
-            ftp_close(
-                $server['connection']
-            );
+
+            if (
+                is_resource(
+                    $server['connection']
+                )
+            ) {
+
+                ftp_close(
+                    $server['connection']
+                );
+
+            }
 
             break;
 
@@ -661,17 +846,18 @@ function disconnectServer(
 
         case 'sftp':
 
-            // phpseclib ferme automatiquement
+            /*
+             * phpseclib ferme automatiquement.
+             */
 
             break;
-
 
     }
 
 }
 /*
 |--------------------------------------------------------------------------
-| Workflow principal
+| Traitement principal
 |--------------------------------------------------------------------------
 */
 
@@ -683,20 +869,11 @@ function executeCapture(
 ): void {
 
 
-    $index = 1000;
-
-
-    $datetime = date(
-        'YmdHis'
-    );
-
-
-    $count = 0;
-
+    $counter = 0;
 
 
     while (
-        $count < $params['nbsnap']
+        $counter < $params['nbsnap']
     ) {
 
 
@@ -705,17 +882,9 @@ function executeCapture(
         ) {
 
 
-            /*
-             * Mode historique V1 :
-             *
-             * toutes les caméras
-             * vers le serveur central
-             */
-
-
             foreach (
                 $config['cameras']
-                as $cameraId => $camera
+                as $camera
             ) {
 
 
@@ -723,51 +892,46 @@ function executeCapture(
                     $camera,
                     $servers,
                     $config,
-                    $datetime,
-                    $index
+                    $counter
                 );
 
-
-                $index++;
-
             }
-
 
 
         } else {
 
 
-            /*
-             * Une seule caméra
-             */
+            if (
+                !isset(
+                    $config['cameras']
+                    [$params['numcam']]
+                )
+            ) {
 
-            $camera =
-                $config['cameras']
-                [$params['numcam']];
+                throw new RuntimeException(
+                    'Caméra inexistante'
+                );
+
+            }
 
 
             processCamera(
-                $camera,
+                $config['cameras'][$params['numcam']],
                 $servers,
                 $config,
-                $datetime,
-                $index
+                $counter
             );
-
-
-            $index++;
-
 
         }
 
 
 
-        $count++;
+        $counter++;
 
 
 
         if (
-            $params['nbsnap'] > 1 &&
+            $counter < $params['nbsnap'] &&
             $params['updelay'] > 0
         ) {
 
@@ -776,7 +940,6 @@ function executeCapture(
             );
 
         }
-
 
     }
 
@@ -797,14 +960,9 @@ function processCamera(
     array $camera,
     array $servers,
     array $config,
-    string $datetime,
     int $index
 ): void {
 
-
-    /*
-     * Téléchargement unique
-     */
 
     $image =
         downloadSnapshot(
@@ -814,29 +972,24 @@ function processCamera(
 
 
     if (
-        !empty($config['options']['check_jpeg'])
+        ($config['options']['check_jpeg'] ?? true)
+        &&
+        !isJPEG(
+            $image
+        )
     ) {
 
-
-        if (
-            !isJPEG($image)
-        ) {
-
-            throw new Exception(
-                'Image JPEG invalide'
-            );
-
-        }
+        throw new RuntimeException(
+            'Image JPEG invalide'
+        );
 
     }
 
 
 
-
     $filename =
         buildFilename(
-            $camera['name'],
-            $datetime,
+            $camera['name'] ?? 'camera',
             $index,
             $config
         );
@@ -859,10 +1012,7 @@ function processCamera(
 
 
 
-
-    /*
-     * Mail traité en partie 4
-     */
+    unset($image);
 
 }
 
@@ -872,7 +1022,7 @@ function processCamera(
 
 /*
 |--------------------------------------------------------------------------
-| Capture caméra
+| Téléchargement snapshot
 |--------------------------------------------------------------------------
 */
 
@@ -882,13 +1032,32 @@ function downloadSnapshot(
 ): string {
 
 
+    if (
+        empty($camera['url'])
+    ) {
+
+        throw new RuntimeException(
+            'URL caméra absente'
+        );
+
+    }
+
+
+
+    $timeout =
+        $camera['timeout']
+        ?? 10;
+
+
+
     $context =
         stream_context_create([
 
             'http' => [
 
-                'timeout' =>
-                    $camera['timeout'] ?? 10,
+                'timeout' => $timeout,
+
+                'ignore_errors' => true,
 
             ]
 
@@ -896,7 +1065,7 @@ function downloadSnapshot(
 
 
 
-    $image =
+    $content =
         file_get_contents(
             $camera['url'],
             false,
@@ -906,19 +1075,19 @@ function downloadSnapshot(
 
 
     if (
-        $image === false
+        $content === false ||
+        $content === ''
     ) {
 
-        throw new Exception(
-            'Capture caméra impossible : '
-            . $camera['name']
+        throw new RuntimeException(
+            'Capture caméra impossible'
         );
 
     }
 
 
 
-    return $image;
+    return $content;
 
 }
 
@@ -928,18 +1097,18 @@ function downloadSnapshot(
 
 /*
 |--------------------------------------------------------------------------
-| Validation JPEG
+| Contrôle JPEG rapide
 |--------------------------------------------------------------------------
 */
 
 
 function isJPEG(
-    string $data
+    string $content
 ): bool {
 
 
     return substr(
-        $data,
+        $content,
         0,
         2
     ) === "\xFF\xD8";
@@ -959,7 +1128,6 @@ function isJPEG(
 
 function buildFilename(
     string $camera,
-    string $datetime,
     int $index,
     array $config
 ): string {
@@ -969,6 +1137,13 @@ function buildFilename(
         $config['filename']
         ??
         '{camera}_{datetime}_{index}.jpg';
+
+
+
+    $camera =
+        sanitizeFilename(
+            $camera
+        );
 
 
 
@@ -990,16 +1165,50 @@ function buildFilename(
 
             $camera,
 
-            $datetime,
+            date(
+                'YmdHis'
+            ),
 
             time(),
 
-            $index,
+            $index + 1,
 
         ],
 
         $template
 
+    );
+
+}
+
+
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Nettoyage nom fichier
+|--------------------------------------------------------------------------
+*/
+
+
+function sanitizeFilename(
+    string $value
+): string {
+
+
+    $value =
+        preg_replace(
+            '/[^a-zA-Z0-9_-]/',
+            '_',
+            $value
+        );
+
+
+
+    return trim(
+        $value ?? 'camera',
+        '_'
     );
 
 }
